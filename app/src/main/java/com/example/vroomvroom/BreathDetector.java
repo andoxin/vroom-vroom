@@ -7,6 +7,10 @@ import android.content.pm.PackageManager;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
+import android.media.audiofx.AcousticEchoCanceler;
+import android.media.audiofx.AutomaticGainControl;
+import android.media.audiofx.AudioEffect;
+import android.media.audiofx.NoiseSuppressor;
 
 /**
  * Micro => détection du souffle (dossier §3b).
@@ -15,6 +19,9 @@ import android.media.MediaRecorder;
  * Gestion du bruit (dossier §6e) :
  *  - calibration : on mesure le bruit ambiant pendant le 3-2-1 ;
  *  - seuil = bruit ambiant × facteur (le facteur dépend de la sensibilité réglée par le joueur) ;
+ *  - musique du jeu : on utilise la source VOICE_COMMUNICATION + l'annulation d'écho (AEC)
+ *    pour retirer du micro ce que le haut-parleur joue ; et la calibration tient compte des
+ *    pics de volume de la musique (pas seulement de la moyenne) ;
  *  - le "souffle maintenu" et le temps de recharge sont gérés dans GameView / GameWorld.
  *
  * La lecture du micro bloque : elle tourne donc dans un Thread à part (sinon le jeu gèlerait).
@@ -33,6 +40,10 @@ public class BreathDetector {
     private boolean calibrating;
     private double calibSum;
     private int calibCount;
+    private float calibPeak;
+
+    // Effets audio attachés au micro (libérés dans readLoop avec l'AudioRecord)
+    private AudioEffect aec, agc, ns;
 
     public static boolean hasPermission(Context c) {
         return c.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
@@ -48,19 +59,12 @@ public class BreathDetector {
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
         if (minBuf <= 0) return false;
 
-        AudioRecord rec = null;
-        try {
-            rec = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 2);
-            if (rec.getState() != AudioRecord.STATE_INITIALIZED) {
-                rec.release();
-                return false;
-            }
-            rec.startRecording();
-        } catch (Exception e) {
-            if (rec != null) rec.release();
-            return false; // cas limite : on ne plante pas, le jeu continue sans boost
-        }
+        // VOICE_COMMUNICATION = source prévue pour les appels : l'annulation d'écho y fonctionne.
+        // Si elle est refusée par l'appareil, on retombe sur le micro brut.
+        AudioRecord rec = openRecorder(MediaRecorder.AudioSource.VOICE_COMMUNICATION, minBuf);
+        if (rec == null) rec = openRecorder(MediaRecorder.AudioSource.MIC, minBuf);
+        if (rec == null) return false; // on ne plante pas, le jeu continue sans boost
+        attachEffects(rec.getAudioSessionId());
 
         final AudioRecord recorder = rec;
         running = true;
@@ -68,6 +72,54 @@ public class BreathDetector {
         thread = new Thread(() -> readLoop(recorder, minBuf / 2), "BreathDetector");
         thread.start();
         return true;
+    }
+
+    private static AudioRecord openRecorder(int source, int minBuf) {
+        AudioRecord rec = null;
+        try {
+            rec = new AudioRecord(source, SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 2);
+            if (rec.getState() != AudioRecord.STATE_INITIALIZED) {
+                rec.release();
+                return null;
+            }
+            rec.startRecording();
+            return rec;
+        } catch (Exception e) {
+            if (rec != null) rec.release();
+            return null;
+        }
+    }
+
+    /**
+     * Annulation d'écho ON (retire la musique du haut-parleur).
+     * Réduction de bruit et gain auto OFF : un souffle EST un bruit, le NS l'effacerait,
+     * et l'AGC aplatirait le volume qu'on mesure.
+     */
+    private void attachEffects(int session) {
+        releaseEffects();
+        try {
+            if (AcousticEchoCanceler.isAvailable()) {
+                aec = AcousticEchoCanceler.create(session);
+                if (aec != null) aec.setEnabled(true);
+            }
+            if (NoiseSuppressor.isAvailable()) {
+                ns = NoiseSuppressor.create(session);
+                if (ns != null) ns.setEnabled(false);
+            }
+            if (AutomaticGainControl.isAvailable()) {
+                agc = AutomaticGainControl.create(session);
+                if (agc != null) agc.setEnabled(false);
+            }
+        } catch (RuntimeException ignored) {
+            // effet non supporté sur cet appareil : on continue sans
+        }
+    }
+
+    private void releaseEffects() {
+        if (aec != null) { aec.release(); aec = null; }
+        if (ns != null)  { ns.release();  ns = null; }
+        if (agc != null) { agc.release(); agc = null; }
     }
 
     /** Boucle du thread : lit le micro en continu et calcule le volume. */
@@ -84,13 +136,17 @@ public class BreathDetector {
                 float rms = (float) Math.sqrt(sum / n);
                 level = level * 0.5f + rms * 0.5f; // petit lissage
                 synchronized (calibLock) {
-                    if (calibrating) { calibSum += rms; calibCount++; }
+                    if (calibrating) {
+                        calibSum += rms; calibCount++;
+                        if (level > calibPeak) calibPeak = level; // pic de la musique / du bruit
+                    }
                 }
             }
         } finally {
             // C'est le thread qui libère le micro, une fois sorti de read() (évite un crash)
             try { rec.stop(); } catch (Exception ignored) { }
             rec.release();
+            releaseEffects();
         }
     }
 
@@ -107,13 +163,18 @@ public class BreathDetector {
 
     // ---------- Calibration (pendant le 3-2-1) ----------
     public void startCalibration() {
-        synchronized (calibLock) { calibrating = true; calibSum = 0; calibCount = 0; }
+        synchronized (calibLock) { calibrating = true; calibSum = 0; calibCount = 0; calibPeak = 0; }
     }
 
     public void endCalibration() {
         synchronized (calibLock) {
             calibrating = false;
-            if (calibCount > 0) ambient = Math.max(60f, (float) (calibSum / calibCount));
+            if (calibCount > 0) {
+                // La musique a des passages plus forts que sa moyenne : on prend aussi en compte
+                // ses pics, sinon un refrain un peu fort déclencherait le boost tout seul.
+                float mean = (float) (calibSum / calibCount);
+                ambient = Math.max(60f, Math.max(mean, calibPeak * 0.8f));
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 package com.example.vroomvroom;
 
 import android.content.Context;
+import android.content.res.AssetFileDescriptor;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.ToneGenerator;
@@ -8,11 +9,13 @@ import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 
+import java.io.IOException;
+
 /**
  * Sons, musique et vibrations
  *  - Bruitages : ToneGenerator (bips du système) => marche sans aucun fichier son.
- *  - Musique : fichiers OPTIONNELS dans res/raw : music_menu, music_game, music_secret
- *    (mp3 ou ogg). S'ils n'existent pas, le jeu tourne simplement sans musique.
+ *  - Musique : assets/music/vroomvroom-bgm.m4a (menus) et vroomvroom-game.m4a (partie),
+ *    jouées en boucle. Si un fichier manque, le jeu tourne simplement sans musique.
  */
 public class AudioFx {
 
@@ -83,16 +86,32 @@ public class AudioFx {
     }
 
     // ---------- Musique ----------
+    /** Associe un nom logique de morceau à un fichier de assets/music (null = pas de musique). */
+    private static String musicFile(String name) {
+        switch (name) {
+            case "music_menu":   return "music/vroomvroom-bgm.m4a";
+            case "music_game":
+            case "music_secret": return "music/vroomvroom-game.m4a"; // le mode secret garde la musique de jeu
+            default:             return null;
+        }
+    }
+
     public void playMusic(String name) {
-        if (name.equals(track)) return; // déjà en train de jouer ce morceau
+        String file = musicFile(name);
+        if (file != null && file.equals(track)) return; // déjà en train de jouer ce morceau
         stopMusic();
-        track = name;
-        // getIdentifier renvoie 0 si le fichier res/raw/<name> n'existe pas => pas de crash
-        int id = context.getResources().getIdentifier(name, "raw", context.getPackageName());
-        if (id == 0) return;
-        music = MediaPlayer.create(context, id);
-        if (music == null) return;
-        music.setLooping(true);
+        if (file == null) return;
+        track = file;
+        MediaPlayer mp = new MediaPlayer();
+        try (AssetFileDescriptor afd = context.getAssets().openFd(file)) {
+            mp.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+            mp.setLooping(true);
+            mp.prepare();
+        } catch (IOException | RuntimeException e) {
+            mp.release(); // fichier absent/illisible => on joue sans musique
+            return;
+        }
+        music = mp;
         applyMusicVolume();
         music.start();
     }

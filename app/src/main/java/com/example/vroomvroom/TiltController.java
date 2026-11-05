@@ -24,15 +24,18 @@ public class TiltController implements SensorEventListener {
     private static final float SMOOTHING = 0.25f;
     /** En dessous de cette inclinaison, le téléphone est considéré "tenu droit" (≈ 15°). */
     private static final float STRAIGHT_TOLERANCE = 2.5f;
-    /** z très négatif = écran tourné vers le sol (mode secret). */
-    private static final float FACE_DOWN_Z = -7.5f;
+    /**
+     * L'écran est verrouillé en paysage. Si l'axe vertical de l'écran mesure une gravité
+     * négative (< -5 m/s² ≈ 30° au-delà de l'horizontale), le téléphone est tenu à l'envers (mode secret).
+     */
+    private static final float UPSIDE_DOWN_Y = -5f;
 
     private final SensorManager sensorManager;
     private final Sensor accelerometer;
     private final View view; // sert à savoir dans quel sens l'écran est tourné
 
     private float steer;          // valeur lissée
-    private float z = 9.81f;      // axe perpendiculaire à l'écran, lissé
+    private float screenY = 9.81f; // axe vertical de l'écran (+ = vers le haut de l'écran), lissé
     private float neutral;        // "zéro" mesuré au début de la partie
 
     public TiltController(Context context, View view) {
@@ -67,19 +70,19 @@ public class TiltController implements SensorEventListener {
         int rotation = Surface.ROTATION_90;
         Display display = view.getDisplay();
         if (display != null) rotation = display.getRotation();
-        float screenX;
+        float screenX, sy;
         switch (rotation) {
-            case Surface.ROTATION_0:   screenX = ax;  break;
-            case Surface.ROTATION_180: screenX = -ax; break;
-            case Surface.ROTATION_270: screenX = ay;  break;
+            case Surface.ROTATION_0:   screenX = ax;  sy = ay;  break;
+            case Surface.ROTATION_180: screenX = -ax; sy = -ay; break;
+            case Surface.ROTATION_270: screenX = ay;  sy = -ax; break;
             case Surface.ROTATION_90:
-            default:                   screenX = -ay; break;
+            default:                   screenX = -ay; sy = ax;  break;
         }
         float target = -screenX; // on veut + = incliné à droite
 
         // Filtre passe-bas : on ne prend qu'une partie de la nouvelle valeur => mouvements doux
         steer += SMOOTHING * (target - steer);
-        z += SMOOTHING * (event.values[2] - z);
+        screenY += SMOOTHING * (sy - screenY);
     }
 
     @Override
@@ -96,5 +99,6 @@ public class TiltController implements SensorEventListener {
 
     public void resetNeutral() { neutral = 0; }
 
-    public boolean isFaceDown() { return z < FACE_DOWN_Z; }
+    /** Téléphone retourné (paysage à l'envers) : l'image apparaît la tête en bas. */
+    public boolean isUpsideDown() { return screenY < UPSIDE_DOWN_Y; }
 }

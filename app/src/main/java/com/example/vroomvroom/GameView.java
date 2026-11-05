@@ -77,7 +77,7 @@ public class GameView extends View {
     private float tiltHold;            // temps passé penché
     private float blowTime;            // temps de souffle continu
     private float breathAudioGuardTime;
-    private float faceDownTime;
+    private float upsideDownTime;
     private boolean secretToggled, secretMsgPending;
     private float secretMsgTime;
 
@@ -439,18 +439,18 @@ public class GameView extends View {
         }
     }
 
-    /** Mode secret : écran vers le sol pendant 4 s, dans le menu principal. */
+    /** Mode secret : téléphone retourné (paysage à l'envers) pendant 4 s, dans le menu principal. */
     private void updateSecretGesture(float dt) {
-        if (tilt.isFaceDown()) {
-            faceDownTime += dt;
-            if (faceDownTime >= SECRET_HOLD && !secretToggled) {
+        if (tilt.isUpsideDown()) {
+            upsideDownTime += dt;
+            if (upsideDownTime >= SECRET_HOLD && !secretToggled) {
                 secretMode = !secretMode;
                 secretToggled = true;        // une seule bascule par retournement
                 secretMsgPending = true;
                 audio.vibrate(300);          // on sent la validation même sans voir l'écran
             }
         } else {
-            faceDownTime = 0;
+            upsideDownTime = 0;
             secretToggled = false;
             if (secretMsgPending) {          // message affiché quand on remet l'écran face à soi
                 secretMsgPending = false;
