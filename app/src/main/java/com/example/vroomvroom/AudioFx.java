@@ -9,7 +9,7 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 
 /**
- * Sons, musique et vibrations (feedbacks multimodaux, dossier §5).
+ * Sons, musique et vibrations
  *  - Bruitages : ToneGenerator (bips du système) => marche sans aucun fichier son.
  *  - Musique : fichiers OPTIONNELS dans res/raw : music_menu, music_game, music_secret
  *    (mp3 ou ogg). S'ils n'existent pas, le jeu tourne simplement sans musique.
@@ -31,7 +31,6 @@ public class AudioFx {
         applySettings();
     }
 
-    /** À rappeler quand le joueur change les volumes dans les paramètres. */
     public void applySettings() {
         if (tone != null) { tone.release(); tone = null; }
         int vol = save.getSoundVolume();
@@ -64,7 +63,7 @@ public class AudioFx {
     public void speedUp()   { beep(ToneGenerator.TONE_PROP_ACK, 300); }
     public void success()   { beep(ToneGenerator.TONE_PROP_ACK, 150); vibrate(50); }
     public void boost()     { beep(ToneGenerator.TONE_CDMA_ALERT_AUTOREDIAL_LITE, 300); vibrate(40); }
-    /** Dossier §5 Collision : "vibration courte + son" (le flash rouge est dessiné par GameWorld). */
+    /** Collision : "vibration courte + son" (le flash rouge est dessiné par GameWorld). */
     public void collision() { beep(ToneGenerator.TONE_SUP_ERROR, 250); vibrate(180); }
     public void gameOver()  { beep(ToneGenerator.TONE_CDMA_CALLDROP_LITE, 600); vibrate(400); }
 

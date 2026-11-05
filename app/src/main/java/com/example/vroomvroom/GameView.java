@@ -45,6 +45,7 @@ public class GameView extends View {
     private static final float TILT_RELEASE = 1.5f;  // zone morte : en dessous (≈ 9°) = tout droit
     private static final float TILT_REPEAT = 0.5f;   // si on reste penché, nouvelle voie toutes les 0.5 s
     private static final float BLOW_HOLD = 0.3f;     // souffle maintenu 0.3 s => un bruit bref ne déclenche rien
+    private static final float BREATH_AUDIO_GUARD = 0.75f; // évite qu'un bruitage soit pris pour un souffle
     private static final float SECRET_HOLD = 4f;     // retourné 4 s => mode secret (dossier §3d)
     private static final float COUNTDOWN_TIME = 3f;
     private static final float TUTO_SKIP_DELAY = 15f;
@@ -75,6 +76,7 @@ public class GameView extends View {
     private int tiltLatch;             // -1/0/+1 : direction déjà prise en compte
     private float tiltHold;            // temps passé penché
     private float blowTime;            // temps de souffle continu
+    private float breathAudioGuardTime;
     private float faceDownTime;
     private boolean secretToggled, secretMsgPending;
     private float secretMsgTime;
@@ -339,12 +341,25 @@ public class GameView extends View {
     private void updatePlaying(float dt) {
         updateLean();
         if (tilt.isAvailable()) handleTilt(dt);
-        if (micAvailable) handleBreath(dt);
+        if (micAvailable) {
+            if (breathAudioGuardTime > 0) {
+                breathAudioGuardTime = Math.max(0, breathAudioGuardTime - dt);
+                blowTime = 0;
+            } else {
+                handleBreath(dt);
+            }
+        }
         if (invertMsgTime > 0) invertMsgTime -= dt;
 
         int ev = world.update(dt);
-        if ((ev & GameWorld.EV_HIT) != 0) audio.collision();
-        if ((ev & GameWorld.EV_SPEED_UP) != 0) audio.speedUp();
+        if ((ev & GameWorld.EV_HIT) != 0) {
+            audio.collision();
+            guardBreathAfterAudio();
+        }
+        if ((ev & GameWorld.EV_SPEED_UP) != 0) {
+            audio.speedUp();
+            guardBreathAfterAudio();
+        }
         if ((ev & GameWorld.EV_DEAD) != 0) finishGame();
     }
 
@@ -394,8 +409,14 @@ public class GameView extends View {
         if (blowTime >= BLOW_HOLD && world.isBoostReady()) {
             world.tryBoost();
             audio.boost();
+            guardBreathAfterAudio();
             blowTime = 0;
         }
+    }
+
+    private void guardBreathAfterAudio() {
+        breathAudioGuardTime = BREATH_AUDIO_GUARD;
+        blowTime = 0;
     }
 
     /** 3-2-1 : avance seulement si le téléphone est tenu droit ; mesure le bruit ambiant. */
@@ -413,6 +434,7 @@ public class GameView extends View {
             if (micAvailable) breath.endCalibration(); // bruit ambiant mesuré => seuil adapté
             state = State.PLAYING;
             audio.go();
+            guardBreathAfterAudio();
             if (secretMode) invertMsgTime = 2.5f;      // le message reste encore un peu après GO
         }
     }
@@ -520,6 +542,7 @@ public class GameView extends View {
         tiltLatch = 0;
         tiltHold = 0;
         blowTime = 0;
+        breathAudioGuardTime = 0;
         breath.setSensitivity(save.getMicSensitivity());
         micAvailable = breath.start(getContext()); // false => jeu jouable sans boost (dossier §6e)
         audio.playMusic(secretMode ? "music_secret" : "music_game");
