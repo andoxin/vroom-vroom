@@ -22,35 +22,19 @@ import android.widget.EditText;
 import java.util.List;
 import java.util.Locale;
 
-/**
- * LA vue du jeu (sujet §4) : boucle update/draw, machine à états (tous les écrans),
- * lecture des capteurs, touch, HUD et menus.
- *
- * Organisation du fichier :
- *   1. Constantes & champs      4. Logique par état (update)    7. Dessin des menus
- *   2. Boucle de jeu            5. Transitions entre états      8. Petits outils de dessin
- *   3. Cycle de vie             6. Dessin du jeu (HUD)          9. Touch
- */
+// Vue principale : boucle de jeu, machine à états des écrans, capteurs, HUD, menus et touch.
 public class GameView extends View {
-
-    // =====================================================================
-    // 1. CONSTANTES & CHAMPS
-    // =====================================================================
-
-    /** Tous les écrans du dossier (§4 Interfaces) + les états internes de la partie. */
     public enum State { MENU, LEVEL_SELECT, LEADERBOARD, SETTINGS, HELP, TUTORIAL, COUNTDOWN, PLAYING, PAUSED, GAME_OVER }
 
-    // --- Réglages capteurs : À AJUSTER EN TESTANT sur vos téléphones ---
     private static final float TILT_TRIGGER = 3.0f;  // inclinaison pour changer de voie (≈ 18°)
-    private static final float TILT_RELEASE = 1.5f;  // zone morte : en dessous (≈ 9°) = tout droit
-    private static final float TILT_REPEAT = 0.5f;   // si on reste penché, nouvelle voie toutes les 0.5 s
-    private static final float BLOW_HOLD = 0.3f;     // souffle maintenu 0.3 s => un bruit bref ne déclenche rien
-    private static final float BREATH_AUDIO_GUARD = 0.75f; // évite qu'un bruitage soit pris pour un souffle
-    private static final float SECRET_HOLD = 4f;     // retourné 4 s => mode secret (dossier §3d)
+    private static final float TILT_RELEASE = 1.5f;  // zone morte (≈ 9°)
+    private static final float TILT_REPEAT = 0.5f;
+    private static final float BLOW_HOLD = 0.3f;  // souffle maintenu => un bruit bref ne déclenche rien
+    private static final float BREATH_AUDIO_GUARD = 0.75f;  // évite qu'un bruitage soit pris pour un souffle
+    private static final float SECRET_HOLD = 4f;
     private static final float COUNTDOWN_TIME = 3f;
     private static final float TUTO_SKIP_DELAY = 15f;
 
-    // --- Palette vaporwave ---
     static final int PINK = 0xFFFF2E97, CYAN = 0xFF2DE2E6, PURPLE = 0xFF7B2FF7,
             YELLOW = 0xFFFFD36E, WHITE = 0xFFFFFFFF, DARK = 0xFF0B0221;
     private static final String GAME_NAME = "Vroom Vroom";
@@ -64,41 +48,35 @@ public class GameView extends View {
     private State state = State.MENU;
     private int selectedLevel = 1;
     private boolean secretMode;
-    private boolean micAvailable;      // micro autorisé ET démarré
-    private boolean waitingPermission; // la popup de permission est affichée
+    private boolean micAvailable;
+    private boolean waitingPermission;
 
-    // Boucle
     private long lastNanos;
-    private float time;                // temps total (animations)
+    private float time;
     private boolean looping;
 
-    // Capteurs
-    private int tiltLatch;             // -1/0/+1 : direction déjà prise en compte
-    private float tiltHold;            // temps passé penché
-    private float blowTime;            // temps de souffle continu
+    private int tiltLatch;
+    private float tiltHold;
+    private float blowTime;
     private float breathAudioGuardTime;
     private float upsideDownTime;
     private boolean secretToggled, secretMsgPending;
     private float secretMsgTime;
 
-    // Compte à rebours / messages
     private float countdown;
     private int lastBeep;
     private boolean resumeCountdown;
     private float invertMsgTime;
-    private float menuScroll;          // défilement du décor derrière les menus
+    private float menuScroll;
 
-    // Tuto
     private int tutoStep;
     private float tutoTimer;
     private boolean tutoFromHelp;
 
-    // Fin de partie
     private int lastScore, lastDistance, lastStars;
     private boolean lastRecord;
 
-    // Interface
-    private float U = 1;               // 1 U = 1 % de la hauteur de l'écran
+    private float U = 1;
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -130,12 +108,13 @@ public class GameView extends View {
     private final UiButton[] gameOverButtons = {btnReplay, btnGoMenu};
     private final UiButton[] none = {};
 
-    private UiButton pressed;           // bouton sous le doigt
+    private UiButton pressed;
     private int draggingSlider = -1;
-    private final RectF[] sliderTracks = {new RectF(), new RectF(), new RectF()}; // son, musique, micro
+    private final RectF[] sliderTracks = {new RectF(), new RectF(), new RectF()};
     private final float[] rowY = new float[5];
     private final RectF vibRow = new RectF(), initialsRow = new RectF(), pauseRect = new RectF();
 
+    // Crée les composants et choisit l'écran de départ.
     public GameView(Context context) {
         super(context);
         save = new SaveManager(context);
@@ -147,11 +126,9 @@ public class GameView extends View {
         try {
             text.setTypeface(Typeface.createFromAsset(context.getAssets(), "fonts/Audiowide-Regular.ttf"));
         } catch (RuntimeException e) {
-            // police introuvable : on garde la police "rétro" du système plutôt que de planter
             text.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
         }
         stroke.setStyle(Paint.Style.STROKE);
-        // Filtre qui inverse les couleurs (mode secret : couleurs en négatif)
         invertPaint.setColorFilter(new ColorMatrixColorFilter(new ColorMatrix(new float[]{
                 -1, 0, 0, 0, 255,
                 0, -1, 0, 0, 255,
@@ -161,33 +138,30 @@ public class GameView extends View {
         btnLevel2.textScale = 0.45f;
         buildHeart();
 
-        // Premier lancement => tuto obligatoire (dossier §6b), sinon menu
         if (save.isTutoDone()) state = State.MENU;
         else startTutorial(false);
         audio.playMusic("music_menu");
     }
 
+    // Accès à la sauvegarde.
     public SaveManager getSave() { return save; }
 
-    // =====================================================================
-    // 2. BOUCLE DE JEU (sujet §4.4)
-    // =====================================================================
-
     private final Runnable gameLoop = new Runnable() {
+        // Une frame : update puis redessin.
         @Override
         public void run() {
             long now = System.nanoTime();
-            // dt = temps écoulé depuis la frame précédente => le jeu va à la même vitesse
-            // sur un téléphone rapide ou lent (au lieu de supposer 16 ms pile)
+            // dt réel => même vitesse de jeu sur un téléphone rapide ou lent
             float dt = (now - lastNanos) / 1_000_000_000f;
             lastNanos = now;
-            if (dt > 0.05f) dt = 0.05f; // si le téléphone a "ramé", on évite un saut énorme
+            if (dt > 0.05f) dt = 0.05f;
             update(dt);
-            invalidate();              // demande un nouveau onDraw()
-            postDelayed(this, 16);     // ≈ 60 images/s
+            invalidate();
+            postDelayed(this, 16);
         }
     };
 
+    // Lance la boucle de jeu.
     private void startLoop() {
         if (looping) return;
         looping = true;
@@ -195,25 +169,22 @@ public class GameView extends View {
         post(gameLoop);
     }
 
+    // Arrête la boucle de jeu.
     private void stopLoop() {
         looping = false;
-        removeCallbacks(gameLoop); // la boucle ne tourne pas en arrière-plan
+        removeCallbacks(gameLoop);
     }
 
-    // =====================================================================
-    // 3. CYCLE DE VIE (appelé par MainActivity)
-    // =====================================================================
-
+    // Reprise de l'appli : boucle, capteurs, musique.
     public void resume() {
         tilt.start();
         audio.resumeMusic();
-        // Si on quitte l'appli pendant l'étape micro du tuto, on la relance proprement
         if (state == State.TUTORIAL && (tutoStep == 2 || tutoStep == 3)) enterTutoStep(2);
         startLoop();
     }
 
+    // Appli en arrière-plan : pause auto, tout est coupé.
     public void pause() {
-        // Cas limite : appel / notification / bouton home pendant la partie => pause auto
         if (state == State.PLAYING || state == State.COUNTDOWN) pauseGame();
         breath.stop();
         tilt.stop();
@@ -221,16 +192,18 @@ public class GameView extends View {
         stopLoop();
     }
 
+    // Libère les ressources.
     public void release() {
         breath.stop();
         audio.release();
     }
 
+    // Indique si la popup micro est affichée.
     public void setWaitingPermission(boolean waiting) {
         waitingPermission = waiting;
     }
 
-    /** Bouton retour d'Android. Renvoie false pour laisser Android quitter l'appli. */
+    // Bouton retour d'Android (false = quitter l'appli).
     public boolean onBack() {
         switch (state) {
             case MENU:
@@ -256,6 +229,7 @@ public class GameView extends View {
         }
     }
 
+    // Taille de l'écran connue : recalcule la mise en page.
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
@@ -263,12 +237,11 @@ public class GameView extends View {
         layoutUi(w, h);
     }
 
-    /** Place tous les boutons en proportion de l'écran (aucune taille de téléphone codée en dur). */
+    // Place les boutons en proportion de l'écran.
     private void layoutUi(int w, int h) {
         U = h / 100f;
         float mid = w / 2f;
 
-        // Menu : JOUER grand et central (zone des pouces), le reste plus petit en dessous (dossier §6c)
         btnPlay.set(mid - w * 0.17f, 40 * U, mid + w * 0.17f, 58 * U);
         float bw = w * 0.2f, gap = w * 0.03f, x0 = mid - (bw * 3 + gap * 2) / 2;
         btnRanking.set(x0, 68 * U, x0 + bw, 81 * U);
@@ -285,7 +258,6 @@ public class GameView extends View {
         btnTutoNext.set(mid - w * 0.15f, 68 * U, mid + w * 0.15f, 84 * U);
         btnTutoSkip.set(w - 3 * U - w * 0.14f, 85 * U, w - 3 * U, 96 * U);
 
-        // Pause : REPRENDRE en grand, au centre ; les 2 autres plus petits en dessous
         btnResume.set(mid - w * 0.18f, 34 * U, mid + w * 0.18f, 52 * U);
         btnRestart.set(mid - w * 0.18f, 60 * U, mid - w * 0.01f, 74 * U);
         btnMenu.set(mid + w * 0.01f, 60 * U, mid + w * 0.18f, 74 * U);
@@ -293,12 +265,9 @@ public class GameView extends View {
         btnReplay.set(mid - w * 0.21f, 72 * U, mid + w * 0.03f, 90 * U);
         btnGoMenu.set(mid + w * 0.06f, 74 * U, mid + w * 0.21f, 88 * U);
 
-        // Bouton pause : large (15 U ≈ 1 cm) et dans le coin, loin de la route (dossier §6a)
         pauseRect.set(w - 18 * U, 3 * U, w - 3 * U, 18 * U);
 
-        // Paramètres : 5 lignes
         for (int i = 0; i < 5; i++) rowY[i] = (30 + i * 14) * U;
-        // Zones tactiles des curseurs plus hautes que le trait dessiné (doigt imprécis)
         sliderTracks[0].set(w * 0.46f, rowY[0] - 5 * U, w * 0.80f, rowY[0] + 5 * U);
         sliderTracks[1].set(w * 0.46f, rowY[1] - 5 * U, w * 0.80f, rowY[1] + 5 * U);
         sliderTracks[2].set(w * 0.46f, rowY[3] - 5 * U, w * 0.80f, rowY[3] + 5 * U);
@@ -306,10 +275,7 @@ public class GameView extends View {
         initialsRow.set(w * 0.12f, rowY[4] - 6 * U, w * 0.88f, rowY[4] + 6 * U);
     }
 
-    // =====================================================================
-    // 4. LOGIQUE PAR ÉTAT (sujet §4.7 : update ne fait évoluer que ce qui doit l'être)
-    // =====================================================================
-
+    // Met à jour l'écran courant.
     private void update(float dt) {
         time += dt;
         if (secretMsgTime > 0) secretMsgTime -= dt;
@@ -331,13 +297,14 @@ public class GameView extends View {
                 updatePlaying(dt);
                 break;
             case PAUSED:
-                break; // rien ne bouge
-            default: // autres menus : seul le décor défile
+                break;
+            default:
                 menuScroll += dt * 12;
                 break;
         }
     }
 
+    // Une frame de partie : contrôles, monde, événements.
     private void updatePlaying(float dt) {
         updateLean();
         if (tilt.isAvailable()) handleTilt(dt);
@@ -363,24 +330,18 @@ public class GameView extends View {
         if ((ev & GameWorld.EV_DEAD) != 0) finishGame();
     }
 
-    /** Inclinaison du joueur, inversée en mode secret (dossier §3d). */
+    // Inclinaison du joueur (inversée en mode secret).
     private float steerInput() {
         float s = tilt.getSteer();
         return secretMode ? -s : s;
     }
 
-    /** Dossier §5 : la voiture s'incline tout de suite avec le téléphone (feedback immédiat). */
+    // Incline la voiture comme le téléphone.
     private void updateLean() {
         world.lean = clamp(steerInput() * 2f, -15f, 15f);
     }
 
-    /**
-     * Direction (dossier §6e) :
-     *  - zone morte : sous TILT_RELEASE on considère "tout droit" ;
-     *  - il faut dépasser TILT_TRIGGER pour changer de voie (hystérésis entre les 2 seuils => pas
-     *    de va-et-vient si la main tremble autour d'un seul seuil) ;
-     *  - une voie à la fois ; si on reste penché, une voie de plus toutes les TILT_REPEAT s.
-     */
+    // Change de voie selon l'inclinaison (hystérésis : pas de va-et-vient si la main tremble).
     private void handleTilt(float dt) {
         float s = steerInput();
         if (Math.abs(s) < TILT_RELEASE) {
@@ -402,7 +363,7 @@ public class GameView extends View {
         }
     }
 
-    /** Boost (dossier §6e) : souffle au-dessus du seuil pendant BLOW_HOLD secondes. */
+    // Déclenche le boost si le souffle est maintenu.
     private void handleBreath(float dt) {
         if (breath.isBlowing()) blowTime += dt;
         else blowTime = 0;
@@ -414,15 +375,16 @@ public class GameView extends View {
         }
     }
 
+    // Ignore le micro juste après un bruitage.
     private void guardBreathAfterAudio() {
         breathAudioGuardTime = BREATH_AUDIO_GUARD;
         blowTime = 0;
     }
 
-    /** 3-2-1 : avance seulement si le téléphone est tenu droit ; mesure le bruit ambiant. */
+    // Gère le 3-2-1 et la calibration.
     private void updateCountdown(float dt) {
         boolean straight = !tilt.isAvailable() || tilt.isHeldStraight();
-        if (!straight) return; // le compte à rebours attend
+        if (!straight) return;
         countdown -= dt;
         int sec = (int) Math.ceil(countdown);
         if (sec < lastBeep && sec > 0) {
@@ -430,40 +392,38 @@ public class GameView extends View {
             audio.countdown();
         }
         if (countdown <= 0) {
-            tilt.calibrateNeutral();                 // position actuelle = "tout droit"
-            if (micAvailable) breath.endCalibration(); // bruit ambiant mesuré => seuil adapté
+            tilt.calibrateNeutral();
+            if (micAvailable) breath.endCalibration();
             state = State.PLAYING;
             audio.go();
             guardBreathAfterAudio();
-            if (secretMode) invertMsgTime = 2.5f;      // le message reste encore un peu après GO
+            if (secretMode) invertMsgTime = 2.5f;
         }
     }
 
-    /** Mode secret : téléphone retourné (paysage à l'envers) pendant 4 s, dans le menu principal. */
+    // Détecte le téléphone retourné pour le mode secret.
     private void updateSecretGesture(float dt) {
         if (tilt.isUpsideDown()) {
             upsideDownTime += dt;
             if (upsideDownTime >= SECRET_HOLD && !secretToggled) {
                 secretMode = !secretMode;
-                secretToggled = true;        // une seule bascule par retournement
+                secretToggled = true;
                 secretMsgPending = true;
-                audio.vibrate(300);          // on sent la validation même sans voir l'écran
+                audio.vibrate(300);
             }
         } else {
             upsideDownTime = 0;
             secretToggled = false;
-            if (secretMsgPending) {          // message affiché quand on remet l'écran face à soi
+            if (secretMsgPending) {
                 secretMsgPending = false;
                 secretMsgTime = 3f;
             }
         }
     }
 
-    // ---------- Tuto interactif (dossier §6b : "faire un geste une fois vaut mieux que le lire") ----------
-    // Étapes : 0 incliner à gauche, 1 à droite, 2 calibration micro, 3 souffler, 4 terminé
-
+    // Fait avancer le tuto selon les gestes du joueur.
     private void updateTutorial(float dt) {
-        if (waitingPermission) return; // on attend la réponse à la popup micro
+        if (waitingPermission) return;
         tutoTimer += dt;
         float s = tilt.getSteer();
         switch (tutoStep) {
@@ -474,7 +434,7 @@ public class GameView extends View {
                 if (s > TILT_TRIGGER || !tilt.isAvailable()) nextTutoStep();
                 break;
             case 2:
-                if (tutoTimer >= 2f) {          // 2 s de silence pour mesurer le bruit ambiant
+                if (tutoTimer >= 2f) {
                     breath.endCalibration();
                     enterTutoStep(3);
                 }
@@ -492,17 +452,18 @@ public class GameView extends View {
         }
     }
 
+    // Passe à l'étape suivante du tuto.
     private void nextTutoStep() {
         audio.success();
         enterTutoStep(tutoStep + 1);
     }
 
+    // Prépare une étape du tuto.
     private void enterTutoStep(int step) {
         tutoStep = step;
         tutoTimer = 0;
         blowTime = 0;
         if (step == 2) {
-            // Pas de micro (refusé ou en panne) => on saute la partie souffle
             if (breath.start(getContext())) {
                 breath.setSensitivity(save.getMicSensitivity());
                 breath.startCalibration();
@@ -512,16 +473,14 @@ public class GameView extends View {
         }
     }
 
-    // =====================================================================
-    // 5. TRANSITIONS ENTRE ÉTATS
-    // =====================================================================
-
+    // Change d'écran.
     private void setState(State s) {
         state = s;
         pressed = null;
         draggingSlider = -1;
     }
 
+    // Lance le tuto.
     private void startTutorial(boolean fromHelp) {
         tutoFromHelp = fromHelp;
         tilt.resetNeutral();
@@ -530,12 +489,14 @@ public class GameView extends View {
         enterTutoStep(0);
     }
 
+    // Termine le tuto.
     private void finishTutorial() {
         breath.stop();
         save.setTutoDone(true);
         setState(tutoFromHelp ? State.HELP : State.MENU);
     }
 
+    // Lance une partie.
     private void startGame(int level) {
         selectedLevel = level;
         world.reset(Level.get(level));
@@ -544,12 +505,13 @@ public class GameView extends View {
         blowTime = 0;
         breathAudioGuardTime = 0;
         breath.setSensitivity(save.getMicSensitivity());
-        micAvailable = breath.start(getContext()); // false => jeu jouable sans boost (dossier §6e)
+        micAvailable = breath.start(getContext());
         audio.playMusic(secretMode ? "music_secret" : "music_game");
         invertMsgTime = 0;
         startCountdown(false);
     }
 
+    // Lance le 3-2-1.
     private void startCountdown(boolean resume) {
         countdown = COUNTDOWN_TIME;
         lastBeep = 4;
@@ -559,24 +521,27 @@ public class GameView extends View {
         setState(State.COUNTDOWN);
     }
 
+    // Met la partie en pause.
     private void pauseGame() {
-        breath.stop();          // pas besoin du micro en pause
+        breath.stop();
         setState(State.PAUSED);
     }
 
-    /** Reprendre => petit 3-2-1 pour laisser le temps de reprendre le téléphone en main. */
+    // Reprend la partie (avec un 3-2-1).
     private void resumeGame() {
-        world.invincibleTime = 0; // sinon la voiture peut rester "clignotée" (invisible) pendant le 3-2-1
+        world.invincibleTime = 0;
         micAvailable = breath.start(getContext());
         startCountdown(true);
     }
 
+    // Retour au menu principal.
     private void goToMenu() {
         breath.stop();
         audio.playMusic("music_menu");
         setState(State.MENU);
     }
 
+    // Fin de partie : score et classement.
     private void finishGame() {
         breath.stop();
         lastScore = world.getScore();
@@ -590,7 +555,6 @@ public class GameView extends View {
         if (lastRecord) {
             final int level = selectedLevel, score = lastScore, stars = lastStars, dist = lastDistance;
             if (save.getInitials() != null) {
-                // Dossier §6d : initiales gardées => on ne les redemande pas
                 save.addScore(level, new SaveManager.ScoreEntry(save.getInitials(), stars, score, dist));
             } else {
                 showInitialsDialog("NOUVEAU RECORD ! Tes initiales :", () ->
@@ -599,10 +563,7 @@ public class GameView extends View {
         }
     }
 
-    /**
-     * Seule saisie de texte du jeu (dossier §6d) : 3 lettres max, lettres uniquement,
-     * majuscules automatiques, pas de suggestions du clavier.
-     */
+    // Demande les initiales (3 lettres).
     private void showInitialsDialog(String title, final Runnable onDone) {
         final EditText input = new EditText(getContext());
         InputFilter lettersOnly = (source, start, end, dest, dstart, dend) -> {
@@ -612,7 +573,7 @@ public class GameView extends View {
                 if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) sb.append(Character.toUpperCase(ch));
             }
             String out = sb.toString();
-            return out.contentEquals(source.subSequence(start, end)) ? null : out; // null = garder tel quel
+            return out.contentEquals(source.subSequence(start, end)) ? null : out;
         };
         input.setFilters(new InputFilter[]{lettersOnly, new InputFilter.LengthFilter(3)});
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
@@ -645,10 +606,7 @@ public class GameView extends View {
         input.requestFocus();
     }
 
-    // =====================================================================
-    // 6. DESSIN DU JEU
-    // =====================================================================
-
+    // Dessine l'écran courant.
     @Override
     protected void onDraw(Canvas c) {
         super.onDraw(c);
@@ -663,7 +621,6 @@ public class GameView extends View {
                 drawGameOver(c);
                 break;
             default:
-                // Menus : le décor vaporwave défile derrière, assombri pour la lisibilité
                 world.drawScene(c, menuScroll, false, time);
                 c.drawColor(0x990B0221);
                 switch (state) {
@@ -678,20 +635,19 @@ public class GameView extends View {
         }
     }
 
+    // Dessine la partie.
     private void drawGame(Canvas c) {
-        // Mode secret : tout ce qui est dessiné entre saveLayer et restore passe par le filtre négatif
-        if (secretMode) c.saveLayer(null, invertPaint);
+        if (secretMode) c.saveLayer(null, invertPaint);  // mode secret : couleurs inversées
         world.drawScene(c, world.distance, true, time);
         drawHud(c);
         if (secretMode) c.restore();
         drawGameMessages(c);
     }
 
-    /** HUD fidèle au sketch "Zone de jeu" : score à gauche, distance au centre, vies + pause à droite. */
+    // Dessine score, distance, vies et pause.
     private void drawHud(Canvas c) {
         int w = getWidth();
 
-        // Score (le compteur défile en continu, dossier §5)
         tmpRect.set(3 * U, 3 * U, 3 * U + Math.max(w * 0.16f, 30 * U), 18 * U);
         fill.setColor(0x88FF2E97);
         c.drawRoundRect(tmpRect, 1.5f * U, 1.5f * U, fill);
@@ -699,10 +655,8 @@ public class GameView extends View {
         drawText(c, String.valueOf(world.getScore()), tmpRect.left + 2 * U, 15.5f * U, 6.5f * U, WHITE, Paint.Align.LEFT);
         if (world.cycle > 0) drawText(c, "★ x" + world.cycle, tmpRect.left + 1 * U, 24 * U, 3.8f * U, YELLOW, Paint.Align.LEFT);
 
-        // Distance parcourue, au centre (sur le soleil)
         drawText(c, String.format(Locale.FRANCE, "%d M", (int) world.distance), w / 2f, 11 * U, 7 * U, WHITE, Paint.Align.CENTER);
 
-        // Vies : cœurs pleins / vides ; le cœur perdu grossit et s'efface (dossier §5)
         float heartSize = 6 * U;
         for (int i = 0; i < GameWorld.MAX_LIVES; i++) {
             float hx = pauseRect.left - 6 * U - (GameWorld.MAX_LIVES - 1 - i) * 8 * U;
@@ -710,14 +664,13 @@ public class GameView extends View {
             if (i < world.lives) {
                 drawHeart(c, hx, hy, heartSize, PINK, 255);
             } else if (i == world.lostHeart && world.heartAnimTime > 0) {
-                float t = world.heartAnimTime / 0.6f;  // 1 -> 0
+                float t = world.heartAnimTime / 0.6f;
                 drawHeart(c, hx, hy, heartSize * (1f + (1f - t) * 0.8f), PINK, (int) (255 * t));
             } else {
                 drawHeart(c, hx, hy, heartSize, WHITE, 50);
             }
         }
 
-        // Bouton pause
         fill.setColor(0x660B0221);
         c.drawRoundRect(pauseRect, 2 * U, 2 * U, fill);
         stroke.setColor(CYAN);
@@ -731,15 +684,15 @@ public class GameView extends View {
         drawBoostGauge(c);
     }
 
-    /** Jauge de boost (sketch : à gauche, segments jaune -> rouge). Réagit en direct au souffle. */
+    // Dessine la jauge de boost.
     private void drawBoostGauge(Canvas c) {
         float left = 3 * U, right = 8 * U, top = 48 * U, bottom = 90 * U;
         boolean active = world.isBoosting();
         boolean cooling = world.cooldownTime > 0;
         float ratio;
         if (!micAvailable) ratio = 0;
-        else if (active) ratio = world.boostTime / GameWorld.BOOST_DURATION;            // se vide
-        else if (cooling) ratio = 1f - world.cooldownTime / GameWorld.BOOST_COOLDOWN;   // se recharge
+        else if (active) ratio = world.boostTime / GameWorld.BOOST_DURATION;
+        else if (cooling) ratio = 1f - world.cooldownTime / GameWorld.BOOST_COOLDOWN;
         else ratio = clamp(breath.getRatio(), 0, 1) * 0.75f + clamp(blowTime / BLOW_HOLD, 0, 1) * 0.25f;
 
         int segs = 8;
@@ -749,17 +702,17 @@ public class GameView extends View {
         for (int i = 0; i < segs; i++) {
             float y1 = bottom - i * (segH + gap);
             int col = i < 3 ? YELLOW : (i < 6 ? 0xFFFF8A3D : 0xFFFF3355);
-            if (cooling && !active) col = 0xFF6A5A8A;   // gris violet = pas encore prêt
+            if (cooling && !active) col = 0xFF6A5A8A;
             fill.setColor(col);
             if (i >= lit) fill.setAlpha(55);
-            else if (active && ((int) (time * 20)) % 2 == 0) fill.setAlpha(190); // scintille
+            else if (active && ((int) (time * 20)) % 2 == 0) fill.setAlpha(190);
             c.drawRect(left, y1 - segH, right, y1, fill);
         }
         String label = !micAvailable ? "MICRO OFF" : active ? "BOOST !" : cooling ? "RECHARGE" : "SOUFFLE";
         drawText(c, label, left, top - 2 * U, 2.8f * U, active ? YELLOW : CYAN, Paint.Align.LEFT);
     }
 
-    /** Messages par-dessus le jeu (pas inversés en mode secret, pour rester lisibles). */
+    // Dessine les messages par-dessus le jeu.
     private void drawGameMessages(Canvas c) {
         float mid = getWidth() / 2f;
         if (state == State.COUNTDOWN) {
@@ -780,21 +733,22 @@ public class GameView extends View {
             float t = world.speedUpTime / 1.5f;
             drawNeonTitle(c, "SPEED UP", mid, 42 * U, (9 + 5 * t) * U);
         }
-        // Mode secret : message au début de la partie (dossier §3d)
         if (secretMode && (state == State.COUNTDOWN || invertMsgTime > 0)) {
             drawText(c, "⚠ COMMANDES INVERSÉES ⚠", mid, 72 * U, 5 * U, YELLOW, Paint.Align.CENTER);
         }
     }
 
+    // Dessine le menu pause.
     private void drawPause(Canvas c) {
-        c.drawColor(0xB0000000); // assombrit le jeu figé derrière (sketch "Menu pause")
+        c.drawColor(0xB0000000);
         drawNeonTitle(c, "PAUSE", getWidth() / 2f, 25 * U, 12 * U);
         drawButtons(c, pauseButtons);
     }
 
+    // Dessine l'écran de fin.
     private void drawGameOver(Canvas c) {
         float mid = getWidth() / 2f;
-        c.drawColor(0xFF000000); // sketch : écran noir
+        c.drawColor(0xFF000000);
         drawNeonTitle(c, "GAME OVER", mid, 20 * U, 13 * U);
         String ini = save.getInitials() != null ? save.getInitials() : "---";
         drawText(c, ini + "   " + stars(lastStars), mid, 34 * U, 6 * U, YELLOW, Paint.Align.CENTER);
@@ -806,10 +760,7 @@ public class GameView extends View {
         drawButtons(c, gameOverButtons);
     }
 
-    // =====================================================================
-    // 7. DESSIN DES MENUS
-    // =====================================================================
-
+    // Dessine le menu principal.
     private void drawMenu(Canvas c) {
         int w = getWidth();
         drawNeonTitle(c, GAME_NAME, w / 2f, 28 * U, 15 * U);
@@ -821,6 +772,7 @@ public class GameView extends View {
         if (secretMode) drawText(c, "◆ MODE SECRET", w - 3 * U, 95 * U, 3.5f * U, PINK, Paint.Align.RIGHT);
     }
 
+    // Dessine le choix du niveau.
     private void drawLevelSelect(Canvas c) {
         drawText(c, "SÉLECTION DU NIVEAU", getWidth() / 2f, 13 * U, 6 * U, WHITE, Paint.Align.CENTER);
         drawButtons(c, levelButtons);
@@ -833,6 +785,7 @@ public class GameView extends View {
         }
     }
 
+    // Dessine le classement.
     private void drawLeaderboard(Canvas c) {
         int w = getWidth();
         drawText(c, "CLASSEMENT", w / 2f, 13 * U, 6 * U, WHITE, Paint.Align.CENTER);
@@ -862,6 +815,7 @@ public class GameView extends View {
         }
     }
 
+    // Dessine les paramètres.
     private void drawSettings(Canvas c) {
         int w = getWidth();
         drawText(c, "PARAMÈTRES", w / 2f, 13 * U, 6 * U, WHITE, Paint.Align.CENTER);
@@ -877,7 +831,6 @@ public class GameView extends View {
             drawText(c, "micro refusé : boost désactivé", w * 0.12f, rowY[3] + 5.5f * U, 2.8f * U, YELLOW, Paint.Align.LEFT);
         }
 
-        // Interrupteur vibrations
         boolean on = save.isVibrationOn();
         float sx = w * 0.46f, sy = rowY[2];
         tmpRect.set(sx, sy - 3 * U, sx + 12 * U, sy + 3 * U);
@@ -892,6 +845,7 @@ public class GameView extends View {
         drawText(c, "(toucher pour modifier)", w * 0.46f + 16 * U, rowY[4] + 1.5f * U, 2.8f * U, WHITE, Paint.Align.LEFT);
     }
 
+    // Dessine un curseur.
     private void drawSlider(Canvas c, RectF r, int value) {
         float y = r.centerY();
         float x = r.left + (r.right - r.left) * value / 100f;
@@ -905,11 +859,11 @@ public class GameView extends View {
         drawText(c, String.valueOf(value), r.right + 3 * U, y + 1.5f * U, 4 * U, WHITE, Paint.Align.LEFT);
     }
 
+    // Dessine l'aide.
     private void drawHelp(Canvas c) {
         int w = getWidth();
         drawText(c, "AIDE", w / 2f, 13 * U, 6 * U, WHITE, Paint.Align.CENTER);
         drawButtons(c, backOnly);
-        // Les gestes "invisibles" sont montrés en image (dossier §6b)
         float angle = (float) Math.sin(time * 2) * 20;
         drawPhone(c, w * 0.3f, 46 * U, 11 * U, angle, CYAN);
         drawText(c, "INCLINER = CHANGER DE VOIE", w * 0.3f, 68 * U, 3.6f * U, CYAN, Paint.Align.CENTER);
@@ -919,6 +873,7 @@ public class GameView extends View {
         drawButtons(c, helpButtons);
     }
 
+    // Dessine le tuto.
     private void drawTutorial(Canvas c) {
         int w = getWidth();
         float mid = w / 2f;
@@ -932,7 +887,6 @@ public class GameView extends View {
             drawText(c, "ÉTAPE " + (tutoStep + 1) + "/3", mid, 20 * U, 3.5f * U, CYAN, Paint.Align.CENTER);
             drawNeonTitle(c, left ? "INCLINE À GAUCHE" : "INCLINE À DROITE", mid, 34 * U, 8 * U);
             drawText(c, "comme un volant", mid, 41 * U, 3.5f * U, WHITE, Paint.Align.CENTER);
-            // Le téléphone dessiné suit TON inclinaison en direct + flèche vers la cible
             drawPhone(c, mid, 60 * U, 10 * U, clamp(tilt.getSteer() * 6f, -60, 60), WHITE);
             drawText(c, left ? "◄" : "►", left ? mid - 28 * U : mid + 28 * U, 64 * U, 10 * U, PINK, Paint.Align.CENTER);
             drawTiltBar(c, 84 * U, tilt.getSteer(), left ? -1 : 1);
@@ -956,10 +910,7 @@ public class GameView extends View {
         }
     }
 
-    // =====================================================================
-    // 8. PETITS OUTILS DE DESSIN
-    // =====================================================================
-
+    // Dessine un texte.
     private void drawText(Canvas c, String s, float x, float y, float size, int color, Paint.Align align) {
         text.setTextSize(size);
         text.setColor(color);
@@ -967,7 +918,7 @@ public class GameView extends View {
         c.drawText(s, x, y, text);
     }
 
-    /** Texte rose avec une "ombre" cyan décalée => effet néon rétro. */
+    // Dessine un titre effet néon.
     private void drawNeonTitle(Canvas c, String s, float x, float y, float size) {
         text.setTextSize(size);
         text.setTextAlign(Paint.Align.CENTER);
@@ -977,11 +928,12 @@ public class GameView extends View {
         c.drawText(s, x, y, text);
     }
 
+    // Dessine une liste de boutons.
     private void drawButtons(Canvas c, UiButton[] buttons) {
         for (UiButton b : buttons) b.draw(c, fill, stroke, text, b == pressed, U);
     }
 
-    /** Cœur = 2 cercles + 1 triangle, dans un carré de taille 1 (agrandi au dessin). */
+    // Construit la forme du cœur.
     private void buildHeart() {
         heart.reset();
         heart.addCircle(-0.25f, -0.1f, 0.27f, Path.Direction.CW);
@@ -992,6 +944,7 @@ public class GameView extends View {
         heart.close();
     }
 
+    // Dessine un cœur.
     private void drawHeart(Canvas c, float x, float y, float size, int color, int alpha) {
         c.save();
         c.translate(x, y);
@@ -1002,7 +955,7 @@ public class GameView extends View {
         c.restore();
     }
 
-    /** Téléphone en paysage, tourné de "angle" degrés. */
+    // Dessine un téléphone incliné.
     private void drawPhone(Canvas c, float x, float y, float s, float angle, int color) {
         c.save();
         c.rotate(angle, x, y);
@@ -1017,7 +970,7 @@ public class GameView extends View {
         c.restore();
     }
 
-    /** Micro avec des "ondes" dont l'intensité suit le volume capté. */
+    // Dessine un micro avec ses ondes.
     private void drawMic(Canvas c, float x, float y, float s, float intensity) {
         fill.setColor(CYAN);
         tmpRect.set(x - s * 0.22f, y - s * 0.6f, x + s * 0.22f, y + s * 0.05f);
@@ -1038,10 +991,10 @@ public class GameView extends View {
         }
     }
 
-    /** Barre d'inclinaison du tuto : zone cible colorée + curseur = inclinaison actuelle. */
+    // Dessine la barre d'inclinaison du tuto.
     private void drawTiltBar(Canvas c, float y, float steer, int targetDir) {
         float mid = getWidth() / 2f, half = getWidth() * 0.25f;
-        float scale = half / 6f; // 6 m/s² = bout de la barre
+        float scale = half / 6f;
         stroke.setStrokeWidth(1.2f * U);
         stroke.setColor(0xFF3A2A5A);
         c.drawLine(mid - half, y, mid + half, y, stroke);
@@ -1052,6 +1005,7 @@ public class GameView extends View {
         c.drawCircle(mid + clamp(steer, -6, 6) * scale, y, 2.5f * U, fill);
     }
 
+    // Dessine une barre de progression.
     private void drawProgress(Canvas c, float y, float ratio, int color) {
         float mid = getWidth() / 2f, half = getWidth() * 0.25f;
         tmpRect.set(mid - half, y - 2 * U, mid + half, y + 2 * U);
@@ -1062,6 +1016,7 @@ public class GameView extends View {
         c.drawRoundRect(tmpRect, 2 * U, 2 * U, fill);
     }
 
+    // Chaîne de n étoiles.
     private static String stars(int n) {
         if (n == 0) return "-";
         if (n > 6) return "★ x" + n;
@@ -1070,14 +1025,12 @@ public class GameView extends View {
         return sb.toString();
     }
 
+    // Borne une valeur entre min et max.
     private static float clamp(float v, float min, float max) {
         return Math.max(min, Math.min(max, v));
     }
 
-    // =====================================================================
-    // 9. TOUCH (sujet §4.6)
-    // =====================================================================
-
+    // Boutons de l'écran courant.
     private UiButton[] currentButtons() {
         switch (state) {
             case MENU: return menuButtons;
@@ -1095,16 +1048,14 @@ public class GameView extends View {
         }
     }
 
+    // Bouton sous le doigt.
     private UiButton findButton(float x, float y) {
         for (UiButton b : currentButtons()) if (b.contains(x, y)) return b;
         return null;
     }
 
-    /**
-     * Dossier §6a : un bouton s'active quand on RELÂCHE le doigt dessus (ACTION_UP), pas quand on
-     * appuie. Si on glisse hors du bouton avant de lâcher, l'action est annulée => moins d'erreurs.
-     */
     @SuppressLint("ClickableViewAccessibility")
+    // Gère le touch ; bouton activé au relâchement (glisser hors du bouton annule).
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         if (waitingPermission) return true;
@@ -1114,14 +1065,12 @@ public class GameView extends View {
             case MotionEvent.ACTION_DOWN:
                 pressed = null;
                 if (state == State.PLAYING || state == State.COUNTDOWN) {
-                    // En jeu : seul tap = pause (zone élargie de 4 U autour du bouton : cible facile)
                     tmpRect.set(pauseRect);
                     tmpRect.inset(-4 * U, -4 * U);
                     if (tmpRect.contains(x, y)) {
                         audio.click();
                         pauseGame();
                     } else if (state == State.PLAYING && !tilt.isAvailable()) {
-                        // Cas limite : pas d'accéléromètre => moitié gauche/droite de l'écran
                         world.moveLane(x < getWidth() / 2f ? -1 : 1);
                     }
                     return true;
@@ -1140,14 +1089,14 @@ public class GameView extends View {
 
             case MotionEvent.ACTION_MOVE:
                 if (draggingSlider >= 0) setSliderFromX(draggingSlider, x);
-                else if (pressed != null && !pressed.contains(x, y)) pressed = null; // annulation
+                else if (pressed != null && !pressed.contains(x, y)) pressed = null;
                 return true;
 
             case MotionEvent.ACTION_UP:
                 if (draggingSlider >= 0) {
                     draggingSlider = -1;
                     audio.applySettings();
-                    audio.click(); // aperçu du nouveau volume
+                    audio.click();
                     return true;
                 }
                 UiButton b = findButton(x, y);
@@ -1157,7 +1106,7 @@ public class GameView extends View {
                 } else if (state == State.SETTINGS && pressed == null) {
                     if (vibRow.contains(x, y)) {
                         save.setVibrationOn(!save.isVibrationOn());
-                        audio.vibrate(80); // on sent tout de suite si c'est activé
+                        audio.vibrate(80);
                     } else if (initialsRow.contains(x, y)) {
                         showInitialsDialog("Tes initiales :", null);
                     }
@@ -1173,6 +1122,7 @@ public class GameView extends View {
         return true;
     }
 
+    // Règle un curseur selon la position du doigt.
     private void setSliderFromX(int index, float x) {
         RectF r = sliderTracks[index];
         int v = Math.round(clamp((x - r.left) / (r.right - r.left), 0, 1) * 100);
@@ -1181,6 +1131,7 @@ public class GameView extends View {
         else { save.setMicSensitivity(v); breath.setSensitivity(v); }
     }
 
+    // Action d'un bouton.
     private void onButton(UiButton b) {
         if (b == btnPlay) setState(State.LEVEL_SELECT);
         else if (b == btnRanking) setState(State.LEADERBOARD);
